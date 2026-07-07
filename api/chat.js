@@ -25,6 +25,7 @@ module.exports = async (req, res) => {
   }
 
   // ask() never throws; it returns the localized fallback on any failure.
-  const { reply } = await bot.ask({ lang, message, history: body.history, channel: "web" });
-  return res.status(200).json({ reply });
+  const { reply, attachments } = await bot.ask({ lang, message, history: body.history, channel: "web" });
+  const images = (attachments || []).map((a) => ({ url: a.webUrl, caption: a.caption || "" }));
+  return res.status(200).json({ reply, images });
 };

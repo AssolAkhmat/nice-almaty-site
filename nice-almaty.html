@@ -526,6 +526,9 @@
   .chat-msg.bot { align-self: flex-start; background: var(--white); color: var(--gray); border: 1px solid #EceEF3; border-bottom-left-radius: 5px; box-shadow: 0 2px 8px rgba(26,58,143,0.05); }
   .chat-msg.user { align-self: flex-end; background: linear-gradient(135deg, var(--blue-light), var(--blue)); color: #fff; border-bottom-right-radius: 5px; }
   .chat-msg.bot a { color: var(--blue-light); font-weight: 600; }
+  .chat-msg.chat-img { padding: 4px; background: transparent; border: none; box-shadow: none; }
+  .chat-msg.chat-img img { display: block; max-width: 100%; border-radius: 12px; }
+  .chat-img-cap { font-size: .78rem; color: var(--muted); margin: 4px 2px 0; }
   .chat-typing { align-self: flex-start; display: flex; gap: 4px; padding: .75rem .9rem; background: var(--white); border: 1px solid #EceEF3; border-radius: 15px; border-bottom-left-radius: 5px; }
   .chat-typing span { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); opacity: .5; animation: chatBlink 1.2s infinite; }
   .chat-typing span:nth-child(2) { animation-delay: .2s; }
@@ -1495,14 +1498,33 @@ function chatEscape(s){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
   });
 }
-// Escape, then turn URLs / wa.me / @handles into links.
+// Escape, then turn URLs / bare wa.me links into clickable links. Done in a
+// SINGLE pass so a full "https://wa.me/..." isn't linkified twice (the old
+// two-pass version wrapped the inner "wa.me/..." again and broke the <a> tag).
 function chatFormat(s){
   var html = chatEscape(s);
-  html = html.replace(/\bhttps?:\/\/[^\s<]+/g, function(u){
-    return '<a href="' + u + '" target="_blank" rel="noopener">' + u + '</a>';
-  });
-  html = html.replace(/\b(wa\.me\/\d+)/g, function(m){
-    return '<a href="https://' + m + '" target="_blank" rel="noopener">' + m + '</a>';
+  // Match a full http(s) URL, OR a bare wa.me/<digits>. For the bare form we
+  // CAPTURE the preceding char instead of using look-behind (look-behind throws
+  // a SyntaxError on older Safari/iOS and would break the whole inline script):
+  // the char must be start-of-string or a non slash/word/dot char, so a wa.me
+  // inside a path ("foo/wa.me/1") is left as plain text.
+  // Preceding char must be start or a separator — exclude slash, ASCII word,
+  // dot AND Cyrillic letters (\w is ASCII-only, so add а-яёА-ЯЁ explicitly).
+  html = html.replace(/(https?:\/\/[^\s<]+)|(^|[^\/\w.а-яёА-ЯЁ])(wa\.me\/\d+)/g, function(match, full, pre, bare){
+    var token = full || bare;
+    var lead = full ? '' : pre;
+    // Peel trailing sentence punctuation, but keep a ")" / "]" that BALANCES an
+    // opening bracket inside the URL (e.g. Wikipedia "..._(mathematics)").
+    var tail = '';
+    while (/[.,!?;:)\]]$/.test(token)) {
+      var last = token.charAt(token.length - 1);
+      if (last === ')' && (token.split('(').length - 1) >= (token.split(')').length - 1)) break;
+      if (last === ']' && (token.split('[').length - 1) >= (token.split(']').length - 1)) break;
+      tail = last + tail;
+      token = token.slice(0, -1);
+    }
+    var url = token.charAt(0) === 'h' ? token : 'https://' + token;
+    return lead + '<a href="' + url + '" target="_blank" rel="noopener">' + token + '</a>' + tail;
   });
   return html;
 }
@@ -1513,6 +1535,37 @@ function addChatMsg(role, text){
   div.className = 'chat-msg ' + (role === 'user' ? 'user' : 'bot');
   div.innerHTML = role === 'user' ? chatEscape(text) : chatFormat(text);
   body.appendChild(div);
+  body.scrollTop = body.scrollHeight;
+}
+
+// Render a photo bubble. Uses DOM properties (not innerHTML) so the URL/caption
+// can't inject markup; only http(s) URLs are allowed; on load error falls back
+// to a plain link so the customer still gets the photo.
+function addChatImage(url, caption){
+  if (!url || !/^https?:\/\//i.test(url)) return;
+  const body = document.getElementById('chat-body');
+  const wrap = document.createElement('div');
+  wrap.className = 'chat-msg bot chat-img';
+  const img = document.createElement('img');
+  img.src = url;
+  img.alt = caption || 'Фото';
+  img.loading = 'lazy';
+  img.onerror = function(){
+    wrap.className = 'chat-msg bot';
+    wrap.textContent = '';
+    const a = document.createElement('a');
+    a.href = url; a.target = '_blank'; a.rel = 'noopener';
+    a.textContent = caption ? (caption + ' — открыть фото') : 'Открыть фото';
+    wrap.appendChild(a);
+  };
+  wrap.appendChild(img);
+  if (caption){
+    const cap = document.createElement('div');
+    cap.className = 'chat-img-cap';
+    cap.textContent = caption;
+    wrap.appendChild(cap);
+  }
+  body.appendChild(wrap);
   body.scrollTop = body.scrollHeight;
 }
 
@@ -1571,10 +1624,16 @@ async function sendChat(preset){
     });
     if (!resp.ok) throw new Error('bad status ' + resp.status);
     const data = await resp.json();
-    const reply = (data && data.reply) ? data.reply : t('chat_error');
+    const reply = (data && typeof data.reply === 'string') ? data.reply : '';
+    const images = (data && data.images) || [];
     showChatTyping(false);
-    addChatMsg('bot', reply);
-    chatHistory.push({ role: 'assistant', content: reply });
+    if (reply) {
+      addChatMsg('bot', reply);
+      chatHistory.push({ role: 'assistant', content: reply });
+    } else if (!images.length) {
+      addChatMsg('bot', t('chat_error'));
+    }
+    images.forEach(function(im){ addChatImage(im.url, im.caption); });
   } catch (e) {
     showChatTyping(false);
     addChatMsg('bot', t('chat_error'));

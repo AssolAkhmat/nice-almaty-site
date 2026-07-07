@@ -102,6 +102,37 @@ async function sendReply(channelId, chatId, chatType, text) {
   }
 }
 
+// Send an image via Wazzup (contentUri). On any failure, fall back to sending
+// the URL as plain text so the customer still gets the photo link.
+async function sendMedia(channelId, chatId, chatType, url, caption) {
+  const apiKey = process.env.WAZZUP_API_KEY;
+  if (!apiKey || !url) return;
+  const body = {
+    channelId: channelId || process.env.WAZZUP_CHANNEL_ID,
+    chatId,
+    chatType: chatType || "whatsapp",
+    contentUri: url,
+  };
+  const linkFallback = () => sendReply(channelId, chatId, chatType, (caption ? caption + " " : "") + url);
+  try {
+    const r = await fetch(`${WAZZUP_BASE}/message`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const detail = await r.text().catch(() => "");
+      console.error("wazzup media failed", r.status, detail.slice(0, 300));
+      await linkFallback();
+    } else {
+      console.log("wazzup: sent media", JSON.stringify({ chatId }));
+    }
+  } catch (e) {
+    console.error("wazzup media error", (e && e.name) || e);
+    await linkFallback();
+  }
+}
+
 async function handleMessage(m) {
   const chatId = extractChatId(m);
   const text = extractText(m);
@@ -110,8 +141,11 @@ async function handleMessage(m) {
   console.log("wazzup: inbound", JSON.stringify({ chatId, text: text.slice(0, 200) }));
 
   // WhatsApp: language unknown → let the model mirror the customer. Booking on.
-  const { reply } = await bot.ask({ message: text, channel: "whatsapp", booking: true });
-  await sendReply(channelId, chatId, chatType, reply);
+  const { reply, attachments } = await bot.ask({ message: text, channel: "whatsapp", booking: true });
+  if (reply) await sendReply(channelId, chatId, chatType, reply);
+  for (const a of attachments || []) {
+    await sendMedia(channelId, chatId, chatType, a.mediaUrl, a.caption);
+  }
 }
 
 module.exports = async (req, res) => {
