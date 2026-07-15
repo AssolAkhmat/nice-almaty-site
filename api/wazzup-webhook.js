@@ -133,16 +133,96 @@ async function sendMedia(channelId, chatId, chatType, url, caption) {
   }
 }
 
-async function handleMessage(m) {
-  const chatId = extractChatId(m);
-  const text = extractText(m);
-  const chatType = m.chatType || "whatsapp";
-  const channelId = m.channelId || process.env.WAZZUP_CHANNEL_ID;
-  console.log("wazzup: inbound", JSON.stringify({ chatId, text: text.slice(0, 200) }));
+// Short in-memory history per WhatsApp chat (best-effort on warm serverless
+// instances). Stops the bot re-asking university/district after a prior reply.
+const CHAT_HISTORY = new Map(); // chatId -> { at, turns:[{role,content}] }
+const CHAT_HISTORY_TTL_MS = 45 * 60 * 1000;
+const CHAT_HISTORY_MAX_TURNS = 8;
+
+function historyFor(chatId) {
+  const row = CHAT_HISTORY.get(chatId);
+  if (!row) return [];
+  if (Date.now() - row.at > CHAT_HISTORY_TTL_MS) {
+    CHAT_HISTORY.delete(chatId);
+    return [];
+  }
+  return row.turns.slice(-CHAT_HISTORY_MAX_TURNS);
+}
+function remember(chatId, userText, assistantText) {
+  const prev = historyFor(chatId);
+  const turns = prev.concat(
+    { role: "user", content: userText },
+    { role: "assistant", content: assistantText }
+  ).slice(-CHAT_HISTORY_MAX_TURNS);
+  CHAT_HISTORY.set(chatId, { at: Date.now(), turns });
+}
+
+// Group inbound messages by chat and answer ONCE per chat. Rapid double-sends
+// ("Біз МУИТпіз" + "Жақын үй керек") used to trigger two conflicting replies.
+function groupByChat(messages) {
+  const order = [];
+  const map = new Map();
+  for (const m of messages) {
+    const chatId = extractChatId(m);
+    if (!map.has(chatId)) {
+      map.set(chatId, []);
+      order.push(chatId);
+    }
+    map.get(chatId).push(m);
+  }
+  return order.map((chatId) => ({ chatId, messages: map.get(chatId) }));
+}
+
+// Debounce per chat across separate webhook POSTs (common when the customer
+// taps send twice quickly). Collect ~1.5s, then one combined reply.
+const PENDING = new Map(); // chatId -> { messages, waiters, timer }
+const DEBOUNCE_MS = 1500;
+
+function enqueueChat(chatId, messages) {
+  return new Promise((resolve) => {
+    let slot = PENDING.get(chatId);
+    if (!slot) {
+      slot = { messages: [], waiters: [], timer: null };
+      PENDING.set(chatId, slot);
+    }
+    slot.messages.push(...messages);
+    slot.waiters.push(resolve);
+    if (slot.timer) clearTimeout(slot.timer);
+    slot.timer = setTimeout(() => {
+      PENDING.delete(chatId);
+      const batch = slot.messages;
+      const waiters = slot.waiters;
+      handleChat(chatId, batch)
+        .catch((e) => console.error("wazzup: handleChat error", (e && e.name) || e))
+        .finally(() => { for (const w of waiters) w(); });
+    }, DEBOUNCE_MS);
+  });
+}
+
+async function handleChat(chatId, messages) {
+  const texts = messages.map(extractText).map((t) => t.trim()).filter(Boolean);
+  if (!texts.length) return;
+  const combined = texts.join("\n");
+  const first = messages[0];
+  const chatType = first.chatType || "whatsapp";
+  const channelId = first.channelId || process.env.WAZZUP_CHANNEL_ID;
+  console.log("wazzup: inbound", JSON.stringify({
+    chatId,
+    parts: texts.length,
+    text: combined.slice(0, 300),
+  }));
 
   // WhatsApp: language unknown → let the model mirror the customer. Booking on.
-  const { reply, attachments } = await bot.ask({ message: text, channel: "whatsapp", booking: true });
-  if (reply) await sendReply(channelId, chatId, chatType, reply);
+  const { reply, attachments } = await bot.ask({
+    message: combined,
+    history: historyFor(chatId),
+    channel: "whatsapp",
+    booking: true,
+  });
+  if (reply) {
+    await sendReply(channelId, chatId, chatType, reply);
+    remember(chatId, combined, reply);
+  }
   for (const a of attachments || []) {
     await sendMedia(channelId, chatId, chatType, a.mediaUrl, a.caption);
   }
@@ -177,11 +257,11 @@ module.exports = async (req, res) => {
   }
 
   const messages = Array.isArray(body.messages) ? body.messages.filter(actionable) : [];
+  const chats = groupByChat(messages);
 
   // Ack fast so Wazzup doesn't retry; process AI + send in the background.
-  res.status(200).json({ ok: true, accepted: messages.length });
+  res.status(200).json({ ok: true, accepted: messages.length, chats: chats.length });
 
-  const work = Promise.all(messages.map((m) => handleMessage(m).catch((e) =>
-    console.error("wazzup: handleMessage error", (e && e.name) || e))));
+  const work = Promise.all(chats.map(({ chatId, messages: ms }) => enqueueChat(chatId, ms)));
   if (waitUntil) { waitUntil(work); } else { await work; }
 };
