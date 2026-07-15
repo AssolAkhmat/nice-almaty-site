@@ -16,6 +16,7 @@
 //                EDGE_CONFIG (enables the instant kill switch)
 
 const bot = require("../lib/bot.js");
+const sheets = require("../lib/sheets.js");
 
 const WAZZUP_BASE = process.env.WAZZUP_API_BASE || "https://api.wazzup24.com/v3";
 
@@ -227,6 +228,13 @@ async function handleChat(chatId, messages) {
     parts: texts.length,
     text: combined.slice(0, 300),
   }));
+
+  // Residents / staff blocklist — never spend DeepSeek or ping the chat.
+  const ignored = await sheets.getIgnoredPhones().catch(() => []);
+  if (sheets.isIgnoredPhone(chatId, ignored)) {
+    console.log("wazzup: ignored (blocklist)", JSON.stringify({ chatId: sheets.normalizePhone(chatId) }));
+    return;
+  }
 
   // WhatsApp: language unknown → let the model mirror the customer. Booking on.
   const { reply, attachments } = await bot.ask({
