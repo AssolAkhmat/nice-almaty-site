@@ -90,5 +90,15 @@ ok("meta: tech stack blocked", bot.isMetaQuestion("на каком стеке т
 ok("meta: cheap model blocked", bot.isMetaQuestion("у вас дешевая модель? Долго обрабатывает"));
 ok("meta: housing question allowed", !bot.isMetaQuestion("Есть ли свободные места в доме 2?"));
 
+eq("strip [МЕНЕДЖЕР] marker",
+  bot.stripManagerMarker("Передам менеджеру.\n[МЕНЕДЖЕР]"),
+  { text: "Передам менеджеру.", needsManager: true });
+
+ok("handoff phrase flags manager",
+  bot.stripManagerMarker("Я передам ваш вопрос менеджеру Nice Almaty, и он свяжется с вами в этом же чате.").needsManager);
+
+ok("normal reply no manager flag",
+  !bot.stripManagerMarker("В Доме 2 есть 1 свободное место за 55 000.").needsManager);
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

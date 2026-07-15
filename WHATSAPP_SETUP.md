@@ -95,6 +95,9 @@ WAZZUP_API_KEY=xxx node scripts/wazzup.js get-webhook
 - **Booking:** the bot guides booking and collects details, but is told it **cannot
   finalize a reservation** — it hands final confirmation to a human manager. It never
   claims a specific bed is locked.
+- **Manager handoff mark:** when the bot cannot decide (deposit exceptions, address,
+  complaints…), it keeps Wazzup’s **unanswered** badge (`clearUnanswered: false`) so
+  a human still sees the chat as needing a reply.
 - **Privacy:** residents' names never leave the table; only availability counts, room
   statuses, and booking dates are in the data the model sees.
 - **Idempotency:** v1 does not de-duplicate Wazzup retries. We ack fast (`200`) to avoid

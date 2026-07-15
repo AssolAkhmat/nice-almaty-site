@@ -86,7 +86,8 @@ function burstCrmMessageId(chatId) {
   return `nice-bot-${chatId}-${bucket}`;
 }
 
-async function sendReply(channelId, chatId, chatType, text, crmMessageId) {
+async function sendReply(channelId, chatId, chatType, text, crmMessageId, opts) {
+  opts = opts || {};
   const apiKey = process.env.WAZZUP_API_KEY;
   if (!apiKey) { console.error("wazzup: WAZZUP_API_KEY not set"); return { ok: false }; }
   const body = {
@@ -96,6 +97,9 @@ async function sendReply(channelId, chatId, chatType, text, crmMessageId) {
     text,
   };
   if (crmMessageId) body.crmMessageId = crmMessageId;
+  // false = keep Wazzup "unanswered" badge so a human manager still sees the chat
+  // after an automated reply (official Wazzup automation pattern).
+  if (opts.clearUnanswered === false) body.clearUnanswered = false;
   try {
     const r = await fetch(`${WAZZUP_BASE}/message`, {
       method: "POST",
@@ -111,7 +115,12 @@ async function sendReply(channelId, chatId, chatType, text, crmMessageId) {
       console.error("wazzup send failed", r.status, detail.slice(0, 300));
       return { ok: false };
     }
-    console.log("wazzup: replied", JSON.stringify({ chatId, len: text.length, crmMessageId: crmMessageId || null }));
+    console.log("wazzup: replied", JSON.stringify({
+      chatId,
+      len: text.length,
+      crmMessageId: crmMessageId || null,
+      needsManager: opts.clearUnanswered === false,
+    }));
     return { ok: true };
   } catch (e) {
     console.error("wazzup send error", (e && e.name) || e);
@@ -260,7 +269,7 @@ async function handleChat(chatId, messages) {
   const skipGreeting = recentlyGreeted(chatId)
     || hist.some((t) => t.role === "assistant")
     || !userHello;
-  const { reply, attachments } = await bot.ask({
+  const { reply, attachments, needsManager } = await bot.ask({
     message: combined,
     history: hist,
     channel: "whatsapp",
@@ -270,7 +279,18 @@ async function handleChat(chatId, messages) {
   if (!reply) return;
 
   // One outbound bot text per chat per ~20s across all Vercel instances.
-  const sent = await sendReply(channelId, chatId, chatType, reply, burstCrmMessageId(chatId));
+  // On human handoff: clearUnanswered=false keeps the red "needs reply" mark in Wazzup.
+  if (needsManager) {
+    console.log("wazzup: handoff → keep unanswered badge", JSON.stringify({ chatId }));
+  }
+  const sent = await sendReply(
+    channelId,
+    chatId,
+    chatType,
+    reply,
+    burstCrmMessageId(chatId),
+    needsManager ? { clearUnanswered: false } : {}
+  );
   if (sent && sent.skipped) return; // another isolate already answered this burst
   if (sent && sent.ok) {
     remember(chatId, combined, reply);
