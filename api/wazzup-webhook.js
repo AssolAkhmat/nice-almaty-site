@@ -108,10 +108,10 @@ async function sendReply(channelId, chatId, chatType, text, crmMessageId, opts) 
     text,
   };
   if (crmMessageId) body.crmMessageId = crmMessageId;
-  // false = keep Wazzup "unanswered" badge for human handoff.
-  // true  = clear the badge after a normal bot answer (must be explicit).
+  // Wazzup: ONLY send clearUnanswered when false (keep red/green unread for humans).
+  // For normal bot answers OMIT the field — that is what actually resets the counter.
+  // Sending clearUnanswered:true was leaving badges on every chat.
   if (opts.clearUnanswered === false) body.clearUnanswered = false;
-  if (opts.clearUnanswered === true) body.clearUnanswered = true;
   try {
     const r = await fetch(`${WAZZUP_BASE}/message`, {
       method: "POST",

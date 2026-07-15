@@ -97,7 +97,8 @@ WAZZUP_API_KEY=xxx node scripts/wazzup.js get-webhook
   claims a specific bed is locked.
 - **Manager handoff mark:** when the bot cannot decide (deposit exceptions, address,
   complaints…), it keeps Wazzup’s **unanswered** badge (`clearUnanswered: false`) so
-  a human still sees the chat as needing a reply.
+  a human still sees the chat as needing a reply. Ordinary bot answers omit that
+  flag so Wazzup **clears** the green/red counter (no badge spam).
 - **Privacy:** residents' names never leave the table; only availability counts, room
   statuses, and booking dates are in the data the model sees.
 - **Idempotency:** v1 does not de-duplicate Wazzup retries. We ack fast (`200`) to avoid
