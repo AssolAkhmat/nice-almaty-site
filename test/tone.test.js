@@ -96,8 +96,8 @@ ok("meta: housing question allowed", !bot.isMetaQuestion("Есть ли своб
   ok("strip [МЕНЕДЖЕР] marker flag", handoff.needsManager === true);
 }
 
-ok("handoff phrase flags manager",
-  bot.stripManagerMarker("Я передам ваш вопрос менеджеру Nice Almaty, и он свяжется с вами в этом же чате.").needsManager);
+ok("handoff phrase alone does NOT flag (no false unread)",
+  !bot.stripManagerMarker("Я передам ваш вопрос менеджеру Nice Almaty, и он свяжется с вами в этом же чате.").needsManager);
 
 ok("normal reply no manager flag",
   !bot.stripManagerMarker("В Доме 2 есть 1 свободное место за 55 000.").needsManager);

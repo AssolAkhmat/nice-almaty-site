@@ -81,9 +81,20 @@ function actionable(m) {
 // We use that as a cross-instance lock so two serverless isolates don't each
 // send a full answer when the customer taps send twice a few seconds apart.
 function burstCrmMessageId(chatId) {
+  // Align with debounce: isolates that race after a short gap still share one lock.
   const windowMs = Number(process.env.WA_BURST_WINDOW_MS || 20000);
-  const bucket = Math.floor(Date.now() / Math.max(5000, windowMs));
+  const bucket = Math.floor(Date.now() / Math.max(15000, windowMs));
   return `nice-bot-${chatId}-${bucket}`;
+}
+
+// Stickers / thumbs-up reactions — do not waste a full AI reply (and do not
+// touch the unanswered badge).
+function isNonTextNoise(text) {
+  const t = String(text || "").trim();
+  if (!t) return true;
+  // Only emoji / symbols / variation selectors / ZWJ — no letters or digits.
+  return /^[\p{Extended_Pictographic}\p{Emoji_Presentation}\p{Emoji}\uFE0F\u200D\s️]+$/u.test(t)
+    && !/[0-9a-zа-яёәіңғүұқөһ]/iu.test(t);
 }
 
 async function sendReply(channelId, chatId, chatType, text, crmMessageId, opts) {
@@ -97,9 +108,10 @@ async function sendReply(channelId, chatId, chatType, text, crmMessageId, opts) 
     text,
   };
   if (crmMessageId) body.crmMessageId = crmMessageId;
-  // false = keep Wazzup "unanswered" badge so a human manager still sees the chat
-  // after an automated reply (official Wazzup automation pattern).
+  // false = keep Wazzup "unanswered" badge for human handoff.
+  // true  = clear the badge after a normal bot answer (must be explicit).
   if (opts.clearUnanswered === false) body.clearUnanswered = false;
+  if (opts.clearUnanswered === true) body.clearUnanswered = true;
   try {
     const r = await fetch(`${WAZZUP_BASE}/message`, {
       method: "POST",
@@ -219,7 +231,8 @@ function groupByChat(messages) {
 // Debounce per chat on the SAME isolate. Cross-isolate doubles are stopped by
 // crmMessageId burst lock in sendReply (see burstCrmMessageId).
 const PENDING = new Map(); // chatId -> { messages, waiters, timer }
-const DEBOUNCE_MS = Number(process.env.WA_DEBOUNCE_MS || 5500);
+// ≥12–15s so «Я учусь в кому» + quick correction «Крму» merge into one reply.
+const DEBOUNCE_MS = Number(process.env.WA_DEBOUNCE_MS || 15000);
 
 function enqueueChat(chatId, messages) {
   return new Promise((resolve) => {
@@ -262,6 +275,13 @@ async function handleChat(chatId, messages) {
     return;
   }
 
+  // Ignore emoji-only reactions (👍) — answering them looks spammy and can
+  // leave odd unread states in Wazzup.
+  if (isNonTextNoise(combined)) {
+    console.log("wazzup: ignore emoji/reaction", JSON.stringify({ chatId, text: combined }));
+    return;
+  }
+
   // WhatsApp: language unknown → let the model mirror the customer. Booking on.
   // Almost never greet — chat is already open. Only answer a hello once / 24h.
   const hist = historyFor(chatId);
@@ -278,8 +298,9 @@ async function handleChat(chatId, messages) {
   });
   if (!reply) return;
 
-  // One outbound bot text per chat per ~20s across all Vercel instances.
-  // On human handoff: clearUnanswered=false keeps the red "needs reply" mark in Wazzup.
+  // One outbound bot text per burst across Vercel instances (crmMessageId lock).
+  // Handoff ONLY via explicit [МЕНЕДЖЕР] marker → keep unanswered badge.
+  // Normal replies MUST clear unanswered (true) so chats don't stay red by mistake.
   if (needsManager) {
     console.log("wazzup: handoff → keep unanswered badge", JSON.stringify({ chatId }));
   }
@@ -289,7 +310,7 @@ async function handleChat(chatId, messages) {
     chatType,
     reply,
     burstCrmMessageId(chatId),
-    needsManager ? { clearUnanswered: false } : {}
+    { clearUnanswered: needsManager ? false : true }
   );
   if (sent && sent.skipped) return; // another isolate already answered this burst
   if (sent && sent.ok) {
