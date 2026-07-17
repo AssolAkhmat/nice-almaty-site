@@ -100,10 +100,10 @@ WAZZUP_API_KEY=xxx node scripts/wazzup.js get-webhook
 - **Booking:** the bot guides booking and collects details, but is told it **cannot
   finalize a reservation** — it hands final confirmation to a human manager. It never
   claims a specific bed is locked.
-- **Manager handoff mark:** when the bot cannot decide (deposit exceptions, address,
-  complaints…), it keeps Wazzup’s **unanswered** badge (`clearUnanswered: false`) so
-  a human still sees the chat as needing a reply. Ordinary bot answers omit that
-  flag so Wazzup **clears** the green/red counter (no badge spam).
+- **Manager handoff mark:** when the bot appends `[МЕНЕДЖЕР]` (real handoff: payment,
+  address, complaints, booking transfer…), it sends `clearUnanswered: false` so the
+  chat stays **unanswered/green** for managers. Ordinary bot answers send
+  `clearUnanswered: true` so the counter clears (chat looks handled).
 - **Privacy:** residents' names never leave the table; only availability counts, room
   statuses, and booking dates are in the data the model sees.
 - **Idempotency:** v1 does not de-duplicate Wazzup retries. We ack fast (`200`) to avoid

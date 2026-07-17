@@ -89,6 +89,7 @@ async function materializeTexts(messages) {
       chatId: extractChatId(m),
       channelId: m.channelId,
       chatType: m.chatType,
+      messageId: m.messageId || m.message_id || null,
       text: resolved.text || "",
       source: resolved.source,
       error: resolved.error || null,
@@ -136,10 +137,13 @@ async function sendReply(channelId, chatId, chatType, text, crmMessageId, opts) 
     text,
   };
   if (crmMessageId) body.crmMessageId = crmMessageId;
-  // Wazzup: ONLY send clearUnanswered when false (keep red/green unread for humans).
-  // For normal bot answers OMIT the field — that is what actually resets the counter.
-  // Sending clearUnanswered:true was leaving badges on every chat.
-  if (opts.clearUnanswered === false) body.clearUnanswered = false;
+  if (opts.refMessageId) body.refMessageId = opts.refMessageId;
+  // Wazzup unanswered (= green/red badge in inbox):
+  //   clearUnanswered:true  → bot fully answered → chat looks handled
+  //   clearUnanswered:false → need a human → keep unanswered badge
+  // Always send the boolean explicitly (omit was unreliable in practice).
+  const keepUnanswered = opts.clearUnanswered === false;
+  body.clearUnanswered = keepUnanswered ? false : true;
   try {
     const r = await fetch(`${WAZZUP_BASE}/message`, {
       method: "POST",
@@ -159,7 +163,8 @@ async function sendReply(channelId, chatId, chatType, text, crmMessageId, opts) 
       chatId,
       len: text.length,
       crmMessageId: crmMessageId || null,
-      needsManager: opts.clearUnanswered === false,
+      clearUnanswered: body.clearUnanswered,
+      needsManager: keepUnanswered,
     }));
     return { ok: true };
   } catch (e) {
@@ -170,16 +175,25 @@ async function sendReply(channelId, chatId, chatType, text, crmMessageId, opts) 
 
 // Send an image via Wazzup (contentUri). On any failure, fall back to sending
 // the URL as plain text so the customer still gets the photo link.
-async function sendMedia(channelId, chatId, chatType, url, caption) {
+async function sendMedia(channelId, chatId, chatType, url, caption, opts) {
+  opts = opts || {};
   const apiKey = process.env.WAZZUP_API_KEY;
   if (!apiKey || !url) return;
+  const keepUnanswered = opts.clearUnanswered === false;
   const body = {
     channelId: channelId || process.env.WAZZUP_CHANNEL_ID,
     chatId,
     chatType: chatType || "whatsapp",
     contentUri: url,
+    // Keep the same unanswered policy as the text reply (media must not wipe a handoff badge).
+    clearUnanswered: keepUnanswered ? false : true,
   };
-  const linkFallback = () => sendReply(channelId, chatId, chatType, (caption ? caption + " " : "") + url);
+  const linkFallback = () => sendReply(
+    channelId, chatId, chatType,
+    (caption ? caption + " " : "") + url,
+    null,
+    { clearUnanswered: keepUnanswered ? false : true }
+  );
   try {
     const r = await fetch(`${WAZZUP_BASE}/message`, {
       method: "POST",
@@ -191,7 +205,7 @@ async function sendMedia(channelId, chatId, chatType, url, caption) {
       console.error("wazzup media failed", r.status, detail.slice(0, 300));
       await linkFallback();
     } else {
-      console.log("wazzup: sent media", JSON.stringify({ chatId }));
+      console.log("wazzup: sent media", JSON.stringify({ chatId, clearUnanswered: body.clearUnanswered }));
     }
   } catch (e) {
     console.error("wazzup media error", (e && e.name) || e);
@@ -295,13 +309,16 @@ async function handleChat(chatId, parts) {
       const reason = (parts.find((p) => p.error) || {}).error;
       const reply = reason === "no_stt_key" ? VOICE_FAIL.no_stt_key : VOICE_FAIL.default;
       console.log("wazzup: voice fail", JSON.stringify({ chatId, reason: reason || "empty" }));
-      await sendReply(channelId, chatId, chatType, reply, burstCrmMessageId(chatId), {});
+      await sendReply(channelId, chatId, chatType, reply, burstCrmMessageId(chatId), {
+        clearUnanswered: true,
+      });
     }
     return;
   }
 
   const combined = texts.join("\n");
   const hadVoice = parts.some((p) => p.source === "audio" && p.text);
+  const refMessageId = [...parts].reverse().map((p) => p.messageId).find(Boolean) || null;
   console.log("wazzup: inbound", JSON.stringify({
     chatId,
     parts: texts.length,
@@ -339,9 +356,12 @@ async function handleChat(chatId, parts) {
   });
   if (!reply) return;
 
-  // One outbound bot text per burst across Vercel instances (crmMessageId lock).
-  // Handoff ONLY via explicit [МЕНЕДЖЕР] → keep unanswered badge for managers.
-  // Normal replies omit clearUnanswered so Wazzup clears the green/red counter.
+  // Handoff ONLY via explicit [МЕНЕДЖЕР] → keep unanswered (green) badge.
+  // Ordinary answers clearUnanswered:true so the chat does not stay "unread".
+  const sendOpts = {
+    clearUnanswered: needsManager ? false : true,
+    refMessageId,
+  };
   if (needsManager) {
     console.log("wazzup: handoff → keep unanswered badge", JSON.stringify({ chatId }));
   }
@@ -351,7 +371,7 @@ async function handleChat(chatId, parts) {
     chatType,
     reply,
     burstCrmMessageId(chatId),
-    needsManager ? { clearUnanswered: false } : {}
+    sendOpts
   );
   if (sent && sent.skipped) return; // another isolate already answered this burst
   if (sent && sent.ok) {
@@ -362,7 +382,9 @@ async function handleChat(chatId, parts) {
   // Photos only if the text reply landed (avoid orphan media after a skip).
   if (sent && sent.ok) {
     for (const a of attachments || []) {
-      await sendMedia(channelId, chatId, chatType, a.mediaUrl, a.caption);
+      await sendMedia(channelId, chatId, chatType, a.mediaUrl, a.caption, {
+        clearUnanswered: needsManager ? false : true,
+      });
     }
   }
 }
