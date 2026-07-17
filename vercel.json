@@ -6,9 +6,6 @@
   ],
   "functions": {
     "api/*.js": {
-      "includeFiles": "data/**"
-    },
-    "api/wazzup-webhook.js": {
       "includeFiles": "data/**",
       "maxDuration": 120
     }
