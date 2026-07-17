@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-06",
+  "generatedAt": "2026-07-17",
   "rooms": [
     {
       "house": "Дом 2",
@@ -10,6 +10,8 @@
       "free": 1,
       "price": 55000,
       "status": "свободно",
+      "moveIn": "На июль-август",
+      "moveInKind": "soon",
       "lastUpdated": "2026-07-02"
     },
     {
@@ -20,7 +22,9 @@
       "totalPlaces": 4,
       "free": 2,
       "price": 60000,
-      "status": "занято"
+      "status": "занято",
+      "moveIn": "На июль-август",
+      "moveInKind": "soon"
     },
     {
       "house": "Дом 3",
@@ -30,7 +34,9 @@
       "totalPlaces": 5,
       "free": 1,
       "price": 70000,
-      "status": "предварительная бронь"
+      "status": "предварительная бронь",
+      "moveIn": "Для брони на учебный год",
+      "moveInKind": "booking"
     }
   ]
 }

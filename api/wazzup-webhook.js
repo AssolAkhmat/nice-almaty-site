@@ -107,13 +107,24 @@ const VOICE_FAIL = {
 };
 
 // Wazzup rejects a second POST with the same crmMessageId (≈60s window).
-// We use that as a cross-instance lock so two serverless isolates don't each
-// send a full answer when the customer taps send twice a few seconds apart.
-function burstCrmMessageId(chatId) {
-  // Align with debounce: isolates that race after a short gap still share one lock.
-  const windowMs = Number(process.env.WA_BURST_WINDOW_MS || 20000);
-  const bucket = Math.floor(Date.now() / Math.max(15000, windowMs));
-  return `nice-bot-${chatId}-${bucket}`;
+// Lock MUST be keyed to the inbound batch (message ids / text), NOT wall-clock
+// buckets — a time bucket would also block legitimate follow-up replies.
+function burstCrmMessageId(chatId, parts) {
+  const ids = (parts || [])
+    .map((p) => p && (p.messageId || p.message_id))
+    .filter(Boolean)
+    .map(String)
+    .sort();
+  if (ids.length) {
+    return ("nice-bot-" + chatId + "-" + ids.join(",")).slice(0, 120);
+  }
+  const text = (parts || []).map((p) => String((p && p.text) || "")).join("\n").slice(0, 240);
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return "nice-bot-" + chatId + "-t" + (h >>> 0).toString(36);
 }
 
 // Stickers / thumbs-up reactions — do not waste a full AI reply (and do not
@@ -273,6 +284,7 @@ function groupByChat(messages) {
 // Debounce per chat on the SAME isolate. Cross-isolate doubles are stopped by
 // crmMessageId burst lock in sendReply (see burstCrmMessageId).
 const PENDING = new Map(); // chatId -> { messages, waiters, timer }
+const INFLIGHT = new Map(); // chatId -> Promise (serialize handleChat per chat)
 // ≥12–15s so «Я учусь в кому» + quick correction «Крму» merge into one reply.
 const DEBOUNCE_MS = Number(process.env.WA_DEBOUNCE_MS || 15000);
 
@@ -290,9 +302,14 @@ function enqueueChat(chatId, parts) {
       PENDING.delete(chatId);
       const batch = slot.messages;
       const waiters = slot.waiters;
-      handleChat(chatId, batch)
-        .catch((e) => console.error("wazzup: handleChat error", (e && e.name) || e))
-        .finally(() => { for (const w of waiters) w(); });
+      const run = () => handleChat(chatId, batch)
+        .catch((e) => console.error("wazzup: handleChat error", (e && e.name) || e));
+      const prev = INFLIGHT.get(chatId);
+      const chain = (prev ? prev.then(run, run) : run()).finally(() => {
+        if (INFLIGHT.get(chatId) === chain) INFLIGHT.delete(chatId);
+        for (const w of waiters) w();
+      });
+      INFLIGHT.set(chatId, chain);
     }, DEBOUNCE_MS);
   });
 }
@@ -302,6 +319,14 @@ async function handleChat(chatId, parts) {
   const first = parts[0] || {};
   const chatType = first.chatType || "whatsapp";
   const channelId = first.channelId || process.env.WAZZUP_CHANNEL_ID;
+  const lockId = burstCrmMessageId(chatId, parts);
+
+  // Defense-in-depth: blocklist also checked before STT in the webhook entry.
+  const ignored = await sheets.getIgnoredPhones().catch(() => []);
+  if (sheets.isIgnoredPhone(chatId, ignored)) {
+    console.log("wazzup: ignored (blocklist)", JSON.stringify({ chatId: sheets.normalizePhone(chatId) }));
+    return;
+  }
 
   if (!texts.length) {
     const voiceTried = parts.some((p) => p.source === "audio");
@@ -309,7 +334,7 @@ async function handleChat(chatId, parts) {
       const reason = (parts.find((p) => p.error) || {}).error;
       const reply = reason === "no_stt_key" ? VOICE_FAIL.no_stt_key : VOICE_FAIL.default;
       console.log("wazzup: voice fail", JSON.stringify({ chatId, reason: reason || "empty" }));
-      await sendReply(channelId, chatId, chatType, reply, burstCrmMessageId(chatId), {
+      await sendReply(channelId, chatId, chatType, reply, lockId, {
         clearUnanswered: true,
       });
     }
@@ -325,13 +350,6 @@ async function handleChat(chatId, parts) {
     voice: hadVoice,
     text: combined.slice(0, 300),
   }));
-
-  // Residents / staff blocklist — never spend DeepSeek or ping the chat.
-  const ignored = await sheets.getIgnoredPhones().catch(() => []);
-  if (sheets.isIgnoredPhone(chatId, ignored)) {
-    console.log("wazzup: ignored (blocklist)", JSON.stringify({ chatId: sheets.normalizePhone(chatId) }));
-    return;
-  }
 
   // Ignore emoji-only reactions (👍) — answering them looks spammy and can
   // leave odd unread states in Wazzup.
@@ -370,7 +388,7 @@ async function handleChat(chatId, parts) {
     chatId,
     chatType,
     reply,
-    burstCrmMessageId(chatId),
+    lockId,
     sendOpts
   );
   if (sent && sent.skipped) return; // another isolate already answered this burst
@@ -423,8 +441,14 @@ module.exports = async (req, res) => {
   // Ack fast so Wazzup doesn't retry; process AI + send in the background.
   res.status(200).json({ ok: true, accepted: messages.length, chats: chats.length });
 
-  // Materialize voice → text immediately (URLs expire), then debounce as usual.
+  // Blocklist BEFORE STT (voice URLs + Whisper cost). Then materialize voice
+  // immediately (Wazzup store links expire) and debounce text handling.
   const work = Promise.all(chats.map(async ({ chatId, messages: ms }) => {
+    const ignored = await sheets.getIgnoredPhones().catch(() => []);
+    if (sheets.isIgnoredPhone(chatId, ignored)) {
+      console.log("wazzup: ignored (blocklist)", JSON.stringify({ chatId: sheets.normalizePhone(chatId) }));
+      return;
+    }
     const parts = await materializeTexts(ms);
     for (const p of parts) {
       if (p.source === "audio") {
