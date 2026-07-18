@@ -33,5 +33,11 @@ ok("muted after human echo activity", mute.isMuted("77009998877", norm));
 mute.setSheetMutes([{ phone: "77001234567", until: "2099-01-01" }], norm);
 ok("muted from sheet tab", mute.isMuted("77001234567", norm));
 
+const dmy = mute.parseUntil("31.12.2099", Date.now());
+ok("parseUntil DD.MM.YYYY", dmy > Date.now() && new Date(dmy).getFullYear() === 2099);
+
+ok("API-like outbound without echo is NOT human",
+  !mute.isHumanOutbound({ direction: "outbound", isEcho: false, sentFromApp: false, text: "бот" }));
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

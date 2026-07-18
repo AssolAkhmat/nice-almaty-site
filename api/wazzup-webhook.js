@@ -280,7 +280,10 @@ async function refreshMuteSheet() {
   try {
     const rows = await sheets.fetchMuteRows().catch(() => null);
     if (rows) managerMute.setSheetMutes(rows, sheets.normalizePhone);
-  } catch (e) { /* ignore */ }
+    else managerMute.markSheetFetchAttempt(); // keep prior rows, avoid refetch storm
+  } catch (e) {
+    managerMute.markSheetFetchAttempt();
+  }
 }
 
 function historyFor(chatId) {
@@ -432,15 +435,27 @@ async function handleChat(chatId, parts) {
   });
   if (!reply) return;
 
+  // Mute as soon as we know it's a handoff — even if Wazzup send fails later.
+  if (needsManager) {
+    muteChat(chatId, "bot_handoff");
+    console.log("wazzup: handoff → keep unanswered badge", JSON.stringify({ chatId }));
+  }
+
+  // Manager may have written while we were calling DeepSeek — re-check before send.
+  await refreshMuteSheet();
+  if (!needsManager && isChatMuted(chatId)) {
+    console.log("wazzup: muted before send (manager won race)", JSON.stringify({
+      chatId: managerMute.chatKey(chatId, sheets.normalizePhone),
+    }));
+    return;
+  }
+
   // Handoff ONLY via explicit [МЕНЕДЖЕР] → keep unanswered (green) badge.
   // Ordinary answers clearUnanswered:true so the chat does not stay "unread".
   const sendOpts = {
     clearUnanswered: needsManager ? false : true,
     refMessageId,
   };
-  if (needsManager) {
-    console.log("wazzup: handoff → keep unanswered badge", JSON.stringify({ chatId }));
-  }
   const sent = await sendReply(
     channelId,
     chatId,
@@ -452,14 +467,11 @@ async function handleChat(chatId, parts) {
   if (sent && sent.skipped) {
     // Winner isolate already replied — still store context on this isolate.
     remember(chatId, combined, reply);
-    if (needsManager) muteChat(chatId, "bot_handoff_skipped_peer");
     return;
   }
   if (sent && sent.ok) {
     remember(chatId, combined, reply);
     if (userHello || bot.startsWithFormalGreeting(reply)) markGreeted(chatId);
-    // After handoff the human owns the chat — stop auto-replies.
-    if (needsManager) muteChat(chatId, "bot_handoff");
   }
 
   // Photos only if the text reply landed (avoid orphan media after a skip).
