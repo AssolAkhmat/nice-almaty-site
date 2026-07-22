@@ -45,14 +45,17 @@ mute.noteManagerActivity(
 ok("nice-bot echo does not mute", !mute.isMuted("77004443322", normalize));
 
 (async () => {
-  const key = "77001112233";
+  const key = "7700" + String(Date.now()).slice(-8);
+  // Ensure no leftover /tmp mute from prior runs.
+  mute._internals.MEM.delete(key);
+
   await botSends.recordSend(key, {
-    messageId: "msg-aaa",
-    crmMessageId: "nice-bot-77001112233-1",
+    messageId: "msg-aaa-" + key,
+    crmMessageId: "nice-bot-" + key + "-1",
     text: "Свободные места: Дом 2 — 3 места",
   });
   ok("isOurSend by messageId",
-    botSends.isOurSend({ messageId: "msg-aaa", isEcho: true, text: "other" }, key));
+    botSends.isOurSend({ messageId: "msg-aaa-" + key, isEcho: true, text: "other" }, key));
   ok("isOurSend by text fingerprint",
     botSends.isOurSend({
       isEcho: true,
