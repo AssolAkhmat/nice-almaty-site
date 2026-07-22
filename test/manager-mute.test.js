@@ -16,8 +16,13 @@ const normalize = (p) => {
 
 ok("default mute is 5 minutes", mute.DEFAULT_MUTE_MS === 5 * 60 * 1000);
 
-ok("human echo is human outbound", mute.isHumanOutbound({ isEcho: true, chatId: "7701" }));
-ok("phone isPhoneOutbound on isEcho", mute.isPhoneOutbound({ isEcho: true, chatId: "7701" }));
+ok("phone isPhoneOutbound on isEcho+author", mute.isPhoneOutbound({ isEcho: true, authorName: "Менеджер", chatId: "7701" }));
+ok("isEcho WITHOUT author is NOT phone (API echo guard)",
+  !mute.isPhoneOutbound({ isEcho: true, chatId: "7701", text: "бот ответил" }));
+ok("isEcho with empty authorName is NOT phone",
+  !mute.isPhoneOutbound({ isEcho: true, authorName: "  ", chatId: "7701" }));
+ok("isEcho with authorId is phone", mute.isPhoneOutbound({ isEcho: true, authorId: "u1", chatId: "7701" }));
+ok("human echo with author is human outbound", mute.isHumanOutbound({ isEcho: true, authorName: "Ассоль", chatId: "7701" }));
 ok("wazzup UI is NOT phone and does NOT count as human mute",
   !mute.isPhoneOutbound({ sentFromApp: true, chatId: "7701" })
   && !mute.isHumanOutbound({ sentFromApp: true, chatId: "7701" }));
@@ -27,25 +32,33 @@ ok("authorName alone is NOT phone without isEcho", !mute.isPhoneOutbound({ autho
 ok("plain inbound is not human outbound", !mute.isHumanOutbound({ isEcho: false, text: "hi" }));
 ok("bot-like outbound without echo is not human", !mute.isHumanOutbound({ direction: "outbound", text: "hi" }));
 ok("our bot crmMessageId is never phone/human",
-  !mute.isPhoneOutbound({ isEcho: true, crmMessageId: "nice-bot-7701-abc", text: "bot" })
-  && !mute.isHumanOutbound({ isEcho: true, crmMessageId: "nice-bot-7701-abc", text: "bot" }));
+  !mute.isPhoneOutbound({ isEcho: true, authorName: "x", crmMessageId: "nice-bot-7701-abc", text: "bot" })
+  && !mute.isHumanOutbound({ isEcho: true, authorName: "x", crmMessageId: "nice-bot-7701-abc", text: "bot" }));
 ok("isBotCrmMessage detects prefix", mute.isBotCrmMessage({ crmMessageId: "nice-bot-x" }));
 ok("isBotCrmMessage rejects others", !mute.isBotCrmMessage({ crmMessageId: "crm-1" }));
-ok("classify phone", mute.classifyOutbound({ isEcho: true, chatId: "1" }) === "phone");
+ok("classify phone", mute.classifyOutbound({ isEcho: true, authorName: "Mgr", chatId: "1" }) === "phone");
+ok("classify isEcho no author as admin/other not phone",
+  mute.classifyOutbound({ isEcho: true, chatId: "1", text: "api echo" }) !== "phone");
 ok("classify admin_api by crm id", mute.classifyOutbound({ crmMessageId: "nice-bot-1", direction: "outbound" }) === "admin_api");
 ok("classify admin_api bare outbound", mute.classifyOutbound({ direction: "outbound", isEcho: false, text: "hi" }) === "admin_api");
 ok("admin api outbound helper", mute.isAdminApiOutbound({ direction: "outbound", isEcho: false }));
-ok("phone is not admin api", !mute.isAdminApiOutbound({ isEcho: true, text: "from phone" }));
+ok("phone with author is not admin api", !mute.isAdminApiOutbound({ isEcho: true, authorName: "Mgr", text: "from phone" }));
 
 mute.muteChat("87771112233", "test", normalize, 60_000);
 ok("muted after muteChat", mute.isMuted("77771112233", normalize));
 ok("muted with +7 format", mute.isMuted("+7 777 111 22 33", normalize));
 
 mute.noteManagerActivity(
-  [{ isEcho: true, chatId: "77009998877" }],
+  [{ isEcho: true, authorName: "Менеджер", chatId: "77009998877" }],
   { extractChatId: (m) => m.chatId, normalizePhone: normalize, isGroup: () => false }
 );
-ok("muted after Phone activity", mute.isMuted("77009998877", normalize));
+ok("muted after Phone activity with author", mute.isMuted("77009998877", normalize));
+
+mute.noteManagerActivity(
+  [{ isEcho: true, chatId: "77008887766", text: "ложное эхо API" }],
+  { extractChatId: (m) => m.chatId, normalizePhone: normalize, isGroup: () => false }
+);
+ok("isEcho without author does not mute", !mute.isMuted("77008887766", normalize));
 
 mute.noteManagerActivity(
   [{ sentFromApp: true, chatId: "77005554433" }],

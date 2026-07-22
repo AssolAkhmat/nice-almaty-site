@@ -269,7 +269,27 @@ async function noteManagerActivity(messages) {
     if (isGroup(m)) continue;
     if (!isOutbound(m) && m.isEcho !== true && m.sentFromApp !== true) continue;
     const kind = managerMute.classifyOutbound(m, isGroup);
-    if (kind === "other" || kind === "unknown") {
+    if (kind === "phone") {
+      console.log("wazzup: outbound phone", JSON.stringify({
+        chatId: sheets.normalizePhone(extractChatId(m)) || extractChatId(m),
+        authorName: m.authorName || null,
+        authorId: m.authorId || null,
+        isEcho: m.isEcho,
+        sentFromApp: m.sentFromApp,
+        crmMessageId: m.crmMessageId || m.crm_message_id || null,
+        text: String(m.text || "").slice(0, 80),
+      }));
+    } else if (m.isEcho === true) {
+      // isEcho without author → almost certainly Admin API echo, not Phone.
+      console.log("wazzup: isEcho without author (skip mute)", JSON.stringify({
+        chatId: sheets.normalizePhone(extractChatId(m)) || extractChatId(m),
+        kind,
+        authorName: m.authorName || null,
+        authorId: m.authorId || null,
+        crmMessageId: m.crmMessageId || m.crm_message_id || null,
+        text: String(m.text || "").slice(0, 80),
+      }));
+    } else if (kind === "other" || kind === "unknown") {
       console.log("wazzup: outbound unclassified", JSON.stringify({
         chatId: sheets.normalizePhone(extractChatId(m)) || extractChatId(m),
         kind,
