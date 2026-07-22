@@ -266,26 +266,33 @@ async function isChatMuted(chatId, opts) {
 }
 
 async function noteManagerActivity(messages) {
-  // Log outbound shapes we did NOT classify as human — helps catch Wazzup field drift.
+  // Classify every outbound so we can see Phone vs Admin API in logs.
   for (const m of messages || []) {
     if (!m || typeof m !== "object") continue;
     if (isGroup(m)) continue;
-    if (!isOutbound(m)) continue;
-    if (managerMute.isBotCrmMessage(m)) continue;
-    if (managerMute.isHumanOutbound(m, isGroup)) continue;
-    console.log("wazzup: outbound not muted", JSON.stringify({
-      chatId: sheets.normalizePhone(extractChatId(m)) || extractChatId(m),
-      isEcho: m.isEcho,
-      sentFromApp: m.sentFromApp,
-      fromMe: m.fromMe,
-      direction: m.direction,
-      inbound: m.inbound,
-      status: m.status,
-      authorName: m.authorName || null,
-      authorId: m.authorId || null,
-      crmMessageId: m.crmMessageId || m.crm_message_id || null,
-      type: m.type || null,
-    }));
+    if (!isOutbound(m) && m.isEcho !== true && m.sentFromApp !== true) continue;
+    const kind = managerMute.classifyOutbound(m, isGroup);
+    if (kind === "other" || kind === "unknown") {
+      console.log("wazzup: outbound unclassified", JSON.stringify({
+        chatId: sheets.normalizePhone(extractChatId(m)) || extractChatId(m),
+        kind,
+        isEcho: m.isEcho,
+        sentFromApp: m.sentFromApp,
+        fromMe: m.fromMe,
+        direction: m.direction,
+        inbound: m.inbound,
+        status: m.status,
+        authorName: m.authorName || null,
+        authorId: m.authorId || null,
+        crmMessageId: m.crmMessageId || m.crm_message_id || null,
+        type: m.type || null,
+      }));
+    } else if (kind === "admin_api") {
+      console.log("wazzup: outbound admin_api (ignored for mute)", JSON.stringify({
+        chatId: sheets.normalizePhone(extractChatId(m)) || extractChatId(m),
+        crmMessageId: m.crmMessageId || m.crm_message_id || null,
+      }));
+    }
   }
   const muted = await managerMute.noteManagerActivityAsync(messages, {
     extractChatId,
@@ -298,6 +305,7 @@ async function noteManagerActivity(messages) {
     console.log("wazzup: mute for manager", JSON.stringify({
       chatId: row.key,
       reason: row.reason,
+      kind: row.kind || row.reason,
       hours: managerMute.DEFAULT_MUTE_MS / 3600000,
       graceMin: managerMute.GRACE_MS / 60000,
       blob: !!process.env.BLOB_READ_WRITE_TOKEN,
