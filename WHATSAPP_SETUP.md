@@ -110,9 +110,9 @@ WAZZUP_API_KEY=xxx node scripts/wazzup.js get-webhook
   writes (`isEcho: true` — WhatsApp handset / iframe, **not** Admin API), the bot
   stays silent for **5 minutes** (`WA_MANAGER_MUTE_MS`). Each new Phone message
   restarts that window. After 5 minutes without Phone, the bot answers again.
-  Wazzup UI (`sentFromApp`) also mutes. Admin API echoes (`crmMessageId` `nice-bot-*`)
-  never mute. State lives in **Vercel Blob**. Optional sheet tab `Молчит бот`
-  with columns `Телефон`, `До` still works as a manual list.
+  **Wazzup UI (`sentFromApp`) does not mute.** Admin API echoes (`crmMessageId`
+  `nice-bot-*`) never mute. State lives in **Vercel Blob**. Optional sheet tab
+  `Молчит бот` with columns `Телефон`, `До` still works as a manual list.
 - **Privacy:** residents' names never leave the table; only availability counts, room
   statuses, and booking dates are in the data the model sees.
 - **Idempotency:** v1 does not de-duplicate Wazzup retries. We ack fast (`200`) to avoid

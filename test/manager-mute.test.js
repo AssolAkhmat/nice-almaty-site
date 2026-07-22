@@ -18,8 +18,10 @@ ok("default mute is 5 minutes", mute.DEFAULT_MUTE_MS === 5 * 60 * 1000);
 
 ok("human echo is human outbound", mute.isHumanOutbound({ isEcho: true, chatId: "7701" }));
 ok("phone isPhoneOutbound on isEcho", mute.isPhoneOutbound({ isEcho: true, chatId: "7701" }));
-ok("wazzup UI is human but NOT phone", mute.isHumanOutbound({ sentFromApp: true, chatId: "7701" })
-  && !mute.isPhoneOutbound({ sentFromApp: true, chatId: "7701" }));
+ok("wazzup UI is NOT phone and does NOT count as human mute",
+  !mute.isPhoneOutbound({ sentFromApp: true, chatId: "7701" })
+  && !mute.isHumanOutbound({ sentFromApp: true, chatId: "7701" }));
+ok("classify wazzup_ui (no mute)", mute.classifyOutbound({ sentFromApp: true, chatId: "1" }) === "wazzup_ui");
 ok("fromMe alone is NOT phone (ambiguous)", !mute.isPhoneOutbound({ fromMe: true, chatId: "7701" }));
 ok("authorName alone is NOT phone without isEcho", !mute.isPhoneOutbound({ authorName: "Ассоль", chatId: "7701" }));
 ok("plain inbound is not human outbound", !mute.isHumanOutbound({ isEcho: false, text: "hi" }));
@@ -30,7 +32,6 @@ ok("our bot crmMessageId is never phone/human",
 ok("isBotCrmMessage detects prefix", mute.isBotCrmMessage({ crmMessageId: "nice-bot-x" }));
 ok("isBotCrmMessage rejects others", !mute.isBotCrmMessage({ crmMessageId: "crm-1" }));
 ok("classify phone", mute.classifyOutbound({ isEcho: true, chatId: "1" }) === "phone");
-ok("classify wazzup_ui", mute.classifyOutbound({ sentFromApp: true, chatId: "1" }) === "wazzup_ui");
 ok("classify admin_api by crm id", mute.classifyOutbound({ crmMessageId: "nice-bot-1", direction: "outbound" }) === "admin_api");
 ok("classify admin_api bare outbound", mute.classifyOutbound({ direction: "outbound", isEcho: false, text: "hi" }) === "admin_api");
 ok("admin api outbound helper", mute.isAdminApiOutbound({ direction: "outbound", isEcho: false }));
@@ -50,7 +51,7 @@ mute.noteManagerActivity(
   [{ sentFromApp: true, chatId: "77005554433" }],
   { extractChatId: (m) => m.chatId, normalizePhone: normalize, isGroup: () => false }
 );
-ok("muted after wazzup UI activity", mute.isMuted("77005554433", normalize));
+ok("wazzup UI does not mute", !mute.isMuted("77005554433", normalize));
 
 mute.noteManagerActivity(
   [{ direction: "outbound", isEcho: false, chatId: "77004443322", crmMessageId: "nice-bot-x", text: "бот" }],
